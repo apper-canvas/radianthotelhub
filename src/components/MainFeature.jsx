@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'react-toastify';
 import { getIcon } from '../utils/iconUtils';
+import { roomTypeService } from '../services/roomTypeService';
+import { reservationService } from '../services/reservationService';
 
 // Icons
 const BedIcon = getIcon('bed');
@@ -15,64 +17,86 @@ const UserIcon = getIcon('user');
 const UserPlusIcon = getIcon('user-plus');
 const SaveIcon = getIcon('save');
 const SearchIcon = getIcon('search');
-
-// Room types and their details
-const roomTypes = [
-  { id: 'standard', name: 'Standard', capacity: 2, price: 129, availability: 15 },
-  { id: 'deluxe', name: 'Deluxe', capacity: 2, price: 179, availability: 12 },
-  { id: 'suite', name: 'Executive Suite', capacity: 4, price: 299, availability: 7 },
-  { id: 'family', name: 'Family Room', capacity: 5, price: 249, availability: 8 },
-  { id: 'presidential', name: 'Presidential Suite', capacity: 6, price: 499, availability: 2 },
-];
-
-// Dummy data for reservations
-const initialReservations = [
-  { 
-    id: 'RSV000123', 
-    guestName: 'Michael Johnson',
-    roomType: 'Deluxe', 
-    checkIn: '2023-08-10', 
-    checkOut: '2023-08-15',
-    guests: 2,
-    status: 'confirmed',
-    totalAmount: 895
-  },
-  { 
-    id: 'RSV000124', 
-    guestName: 'Sarah Williams',
-    roomType: 'Standard', 
-    checkIn: '2023-08-12', 
-    checkOut: '2023-08-14',
-    guests: 1,
-    status: 'confirmed',
-    totalAmount: 258
-  },
-  { 
-    id: 'RSV000125', 
-    guestName: 'David Chen',
-    roomType: 'Suite', 
-    checkIn: '2023-08-15', 
-    checkOut: '2023-08-20',
-    guests: 3,
-    status: 'pending',
-    totalAmount: 1495
-  },
-];
+const LoaderIcon = getIcon('loader-2');
 
 const MainFeature = ({ onServiceComplete }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [activeRoomType, setActiveRoomType] = useState(roomTypes[0]);
+  const [roomTypes, setRoomTypes] = useState([]);
+  const [activeRoomType, setActiveRoomType] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [reservations, setReservations] = useState(initialReservations);
+  const [reservations, setReservations] = useState([]);
   const [newReservation, setNewReservation] = useState({
     guestName: '',
-    roomType: 'standard',
+    roomType: '',
     checkIn: '',
     checkOut: '',
     guests: 1,
     specialRequests: ''
   });
   const [errors, setErrors] = useState({});
+  const [isLoading, setIsLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // Load room types and reservations on component mount
+  useEffect(() => {
+    loadRoomTypes();
+    loadReservations();
+  }, []);
+
+  const loadRoomTypes = async () => {
+    try {
+      setIsLoading(true);
+      const data = await roomTypeService.fetchRoomTypes();
+      
+      // Transform data to match expected format
+      const transformedData = data.map(item => ({
+        id: item.id || item.Id,
+        name: item.Name || 'Unknown',
+        capacity: item.capacity || 2,
+        price: item.price || 0,
+        availability: item.availability || 0,
+        description: item.description || '',
+        amenities: typeof item.amenities === 'string' ? item.amenities.split(',') : (item.amenities || [])
+      }));
+      
+      setRoomTypes(transformedData);
+      if (transformedData.length > 0) {
+        setActiveRoomType(transformedData[0]);
+        setNewReservation(prev => ({ ...prev, roomType: transformedData[0].id }));
+      }
+    } catch (error) {
+      console.error('Error loading room types:', error);
+      toast.error('Failed to load room types');
+      setRoomTypes([]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const loadReservations = async () => {
+    try {
+      const data = await reservationService.fetchReservations();
+      
+      // Transform data to match expected format
+      const transformedData = data.map(item => ({
+        id: item.reservation_number || item.Id,
+        guestName: item.guest_name || 'Unknown Guest',
+        roomType: item.room_type || 'Unknown',
+        checkIn: item.check_in_date || '',
+        checkOut: item.check_out_date || '',
+        guests: item.guests_count || 1,
+        status: item.status || 'pending',
+        totalAmount: item.total_amount || 0
+      }));
+      
+      setReservations(transformedData);
+    } catch (error) {
+      console.error('Error loading reservations:', error);
+      toast.error('Failed to load reservations');
+      setReservations([]);
+    }
+  };
 
   // Filter reservations by search term
   const filteredReservations = reservations.filter(reservation => 
@@ -125,7 +149,7 @@ const MainFeature = ({ onServiceComplete }) => {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     
     if (!validateForm()) {
@@ -133,6 +157,9 @@ const MainFeature = ({ onServiceComplete }) => {
       return;
     }
     
+    try {
+      setIsSubmitting(true);
+      
     // Generate a random ID for the new reservation
     const newId = `RSV${Math.floor(100000 + Math.random() * 900000)}`;
     
@@ -143,42 +170,105 @@ const MainFeature = ({ onServiceComplete }) => {
     
     // Find selected room type to get price
     const selectedRoomType = roomTypes.find(room => room.id === newReservation.roomType);
+      if (!selectedRoomType) {
+        toast.error('Selected room type not found');
+        return;
+      }
     const totalAmount = selectedRoomType.price * nights;
     
-    // Create the new reservation object
-    const reservation = {
-      id: newId,
-      guestName: newReservation.guestName,
-      roomType: selectedRoomType.name,
-      checkIn: newReservation.checkIn,
-      checkOut: newReservation.checkOut,
-      guests: newReservation.guests,
-      status: 'confirmed',
-      totalAmount
+      // Create reservation data for API
+      const reservationData = {
+        Name: newReservation.guestName,
+        reservation_number: newId,
+        guest_name: newReservation.guestName,
+        check_in_date: newReservation.checkIn,
+        check_out_date: newReservation.checkOut,
+        guests_count: newReservation.guests,
+        status: 'confirmed',
+        total_amount: totalAmount,
+        special_requests: newReservation.specialRequests,
+        room_type: selectedRoomType.id
+      };
+
+      // Create reservation via service
+      const createdReservations = await reservationService.createReservation(reservationData);
+      
+      if (createdReservations && createdReservations.length > 0) {
+        // Reload reservations to get updated data
+        await loadReservations();
+        
+        // Reset form and close modal
+        setNewReservation({
+          guestName: '',
+          roomType: roomTypes[0]?.id || '',
+          checkIn: '',
+          checkOut: '',
+          guests: 1,
+          specialRequests: ''
+        });
+        setIsModalOpen(false);
+        
+        // Show success toast
+        toast.success("Reservation created successfully!");
+      }
+    } catch (error) {
+      console.error('Error creating reservation:', error);
+      toast.error('Failed to create reservation');
+    } finally {
+      setIsSubmitting(false);
+    }
     };
-    
-    // Add to reservations state
-    setReservations(prev => [reservation, ...prev]);
-    
-    // Reset form and close modal
-    setNewReservation({
-      guestName: '',
-      roomType: 'standard',
-      checkIn: '',
-      checkOut: '',
-      guests: 1,
-      specialRequests: ''
-    });
-    setIsModalOpen(false);
-    
-    // Show success toast
-    toast.success("Reservation created successfully!");
+
+  const handleDelete = async (id) => {
+    try {
+      setIsDeleting(true);
+      
+      // Find the reservation to get its actual ID
+      const reservation = reservations.find(r => r.id === id);
+      if (!reservation) {
+        toast.error('Reservation not found');
+        return;
+      }
+      
+      // Delete via service (using reservation number as ID)
+      await reservationService.deleteReservation([id]);
+      
+      // Reload reservations to get updated data
+      await loadReservations();
+      
+      toast.success("Reservation cancelled successfully");
+    } catch (error) {
+      console.error('Error deleting reservation:', error);
+      toast.error('Failed to cancel reservation');
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
-  const handleDelete = (id) => {
-    setReservations(prev => prev.filter(reservation => reservation.id !== id));
-    toast.success("Reservation cancelled successfully");
-  };
+  // Show loading state
+  if (isLoading) {
+    return (
+      <section className="mb-8">
+        <div className="flex items-center justify-center py-8">
+          <LoaderIcon className="h-8 w-8 animate-spin text-primary mr-3" />
+          <span>Loading room types and reservations...</span>
+        </div>
+      </section>
+    );
+  }
+
+  // Show empty state if no room types
+  if (!roomTypes || roomTypes.length === 0) {
+    return (
+      <section className="mb-8">
+        <div className="text-center py-8">
+          <BedIcon className="h-16 w-16 text-surface-400 mx-auto mb-4" />
+          <h3 className="text-lg font-semibold text-surface-600 dark:text-surface-400 mb-2">No Room Types Available</h3>
+          <p className="text-surface-500">Please add room types to start managing reservations.</p>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="mb-8">
@@ -248,6 +338,7 @@ const MainFeature = ({ onServiceComplete }) => {
       </div>
 
       {/* Room Details */}
+      {activeRoomType && (
       <motion.div 
         className="card mb-6 overflow-hidden"
         initial={{ opacity: 0, y: 20 }}
@@ -295,12 +386,19 @@ const MainFeature = ({ onServiceComplete }) => {
             </div>
             
             <p className="mt-3 text-surface-600 dark:text-surface-300">
-              {activeRoomType.id === 'standard' && "Comfortable standard room with all essential amenities for a pleasant stay. Includes a queen-size bed, work desk, and private bathroom."}
-              {activeRoomType.id === 'deluxe' && "Spacious deluxe room featuring premium furnishings, a king-size bed, sitting area, and enhanced amenities for a luxurious experience."}
-              {activeRoomType.id === 'suite' && "Elegant suite with separate living area, king-size bed, premium entertainment system, and stunning city views. Includes complimentary breakfast."}
-              {activeRoomType.id === 'family' && "Perfect for families, featuring two queen beds, extra space for children to play, and family-friendly amenities. Convenient location near hotel facilities."}
-              {activeRoomType.id === 'presidential' && "Our most luxurious accommodation with separate bedroom, spacious living room, dining area, and premium amenities. Includes VIP services and exclusive access to the executive lounge."}
+              {activeRoomType.description || "Comfortable room with modern amenities for a pleasant stay."}
             </p>
+
+            {/* Amenities */}
+            {activeRoomType.amenities && activeRoomType.amenities.length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-1">
+                {activeRoomType.amenities.map((amenity, index) => (
+                  <span key={index} className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
+                    {amenity.trim()}
+                  </span>
+                ))}
+              </div>
+            )}
             
             <div className="mt-4 flex flex-col sm:flex-row gap-3">
               <button 
@@ -322,6 +420,7 @@ const MainFeature = ({ onServiceComplete }) => {
           </div>
         </div>
       </motion.div>
+      )}
 
       {/* Reservations Table */}
       <div className="card overflow-hidden">
@@ -361,9 +460,14 @@ const MainFeature = ({ onServiceComplete }) => {
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                       <button
                         onClick={() => handleDelete(reservation.id)}
+                        disabled={isDeleting}
                         className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300"
                       >
+                        {isDeleting ? (
+                          <LoaderIcon className="h-4 w-4 animate-spin" />
+                        ) : (
                         Cancel
+                        )}
                       </button>
                     </td>
                   </tr>
@@ -547,9 +651,14 @@ const MainFeature = ({ onServiceComplete }) => {
                   </button>
                   <button
                     type="submit"
+                    disabled={isSubmitting}
                     className="btn btn-primary"
                   >
+                    {isSubmitting ? (
+                      <LoaderIcon className="mr-1.5 h-4 w-4 animate-spin" />
+                    ) : (
                     <SaveIcon className="mr-1.5 h-4 w-4" />
+                    )}
                     Create Reservation
                   </button>
                 </div>
